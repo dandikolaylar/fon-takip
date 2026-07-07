@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fon Takip">
+<meta name="theme-color" content="#0b1020">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>Fon Portföy Takip</title>
+<style>
+:root { --bg:#0b1020; --card:#121a2d; --muted:#94a3b8; --text:#e5e7eb; --green:#22c55e; --red:#ef4444; --blue:#60a5fa; --line:#25304a; }
+* { box-sizing:border-box; }
+body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif; background:var(--bg); color:var(--text); padding: calc(env(safe-area-inset-top) + 8px) 14px 28px; }
+h1 { font-size:24px; margin:18px 0 4px; } h2 { font-size:18px; margin:22px 0 10px; } p { color:var(--muted); margin:6px 0 14px; }
+.grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.card { background:linear-gradient(180deg,#16213a,#10182a); border:1px solid var(--line); border-radius:18px; padding:14px; box-shadow:0 10px 25px rgba(0,0,0,.18); }
+.big { font-size:22px; font-weight:750; margin-top:4px; } .label { color:var(--muted); font-size:12px; }
+.good { color:var(--green); } .bad { color:var(--red); }
+input, button { width:100%; border:0; border-radius:14px; padding:13px; font-size:16px; }
+input { background:#0f172a; color:var(--text); border:1px solid var(--line); margin-bottom:8px; }
+button { background:#2563eb; color:white; font-weight:700; margin-top:4px; } button.secondary { background:#334155; }
+canvas { width:100%; height:210px; background:#0f172a; border:1px solid var(--line); border-radius:16px; }
+table { width:100%; border-collapse:collapse; font-size:13px; overflow:hidden; border-radius:14px; }
+th,td { padding:9px 7px; border-bottom:1px solid var(--line); text-align:right; }
+th:first-child,td:first-child { text-align:left; } th { color:var(--muted); font-weight:600; }
+.del { color:var(--red); background:none; border:none; width:auto; padding:2px 6px; font-size:15px; font-weight:700; }
+.footer { font-size:12px; color:var(--muted); text-align:center; margin-top:22px; }
+.hidden { display:none; }
+#emptyState { text-align:center; padding:28px 14px; }
+#emptyState p { margin-bottom:16px; }
+@media (max-width:420px) { .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<h1>Fon Portföy Takip</h1>
+<p>Veriler yalnızca bu telefonda, uygulama hafızasında saklanır.</p>
+
+<div id="emptyState" class="card hidden">
+  <p>Henüz veri yok. Başlamak için yedek dosyanı (JSON) içe aktar.</p>
+  <button onclick="document.getElementById('importFile').click()">Veriyi içe aktar</button>
+  <button class="secondary" onclick="togglePaste()">Yapıştırarak aktar</button>
+</div>
+
+<div id="app">
+<div class="grid">
+  <div class="card"><div class="label">Toplam maliyet</div><div class="big" id="totalCost"></div></div>
+  <div class="card"><div class="label">Portföy değeri</div><div class="big" id="portfolio"></div></div>
+  <div class="card"><div class="label">Toplam kâr</div><div class="big" id="profit"></div></div>
+  <div class="card"><div class="label">Toplam getiri</div><div class="big" id="returnPct"></div></div>
+</div>
+
+<h2>Günlük kayıt ekle</h2>
+<div class="card">
+  <input id="date" type="date">
+  <input id="daily" inputmode="text" placeholder="Günlük kâr/zarar, örn: -28668">
+  <button onclick="addEntry()">Kaydı ekle / güncelle</button>
+  <button class="secondary" onclick="exportJson()">Veriyi yedekle</button>
+  <button class="secondary" onclick="document.getElementById('importFile').click()">Veriyi içe aktar</button>
+  <button class="secondary" onclick="togglePaste()">Yapıştırarak aktar</button>
+</div>
+
+<h2>Günlük kâr / zarar</h2><canvas id="dailyChart" width="900" height="420"></canvas>
+<h2>Toplam kâr</h2><canvas id="profitChart" width="900" height="420"></canvas>
+<h2>Portföy büyüklüğü</h2><canvas id="portfolioChart" width="900" height="420"></canvas>
+
+<h2>Maliyet tablosu</h2><div class="card"><table id="costTable"></table></div>
+<h2>Günlük kayıt defteri</h2><div class="card"><table id="logTable"></table></div>
+</div>
+
+<input id="importFile" type="file" class="hidden" onchange="importJson(event)">
+
+<div id="pasteBox" class="card hidden" style="margin-top:10px">
+  <p>veri.json içeriğini kopyalayıp buraya yapıştır:</p>
+  <textarea id="pasteArea" rows="6" style="width:100%;background:#0f172a;color:var(--text);border:1px solid var(--line);border-radius:14px;padding:12px;font-size:13px"></textarea>
+  <button onclick="importPasted()">Yapıştırılanı aktar</button>
+</div>
+<div class="footer">Ana ekrana eklemek için: Safari → Paylaş → Ana Ekrana Ekle</div>
+
+<script>
+const fmt = new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 0 });
+const fmt2 = new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+let entries = JSON.parse(localStorage.getItem('portfolioEntries') || '[]');
+let costs   = JSON.parse(localStorage.getItem('portfolioCosts') || '[]');
+let base    = JSON.parse(localStorage.getItem('portfolioBase') || 'null');
+
+function saveAll() {
+  localStorage.setItem('portfolioEntries', JSON.stringify(entries));
+  localStorage.setItem('portfolioCosts', JSON.stringify(costs));
+  localStorage.setItem('portfolioBase', JSON.stringify(base));
+}
+function money(n) { return fmt.format(Math.round(n)) + " TL"; }
+function shortDate(s) { const d=new Date(s+"T00:00:00"); return d.toLocaleDateString('tr-TR',{day:'2-digit',month:'2-digit'}); }
+function fullDate(s) { const d=new Date(s+"T00:00:00"); return d.toLocaleDateString('tr-TR'); }
+function cls(n) { return n>=0?'good':'bad'; }
+function totalCost() { return costs.reduce((s,x)=>s+x.cost,0); }
+
+// Tüm kümülatif değerleri baz değerlerden yeniden hesaplar.
+// base = izlemeye başlamadan önceki toplam kâr ve portföy değeri.
+function recalcAll() {
+  entries.sort((a,b)=>a.date.localeCompare(b.date));
+  if (!entries.length) return;
+  if (!base) {
+    // İlk içe aktarmada baz değerleri ilk kayıttan türet
+    base = {
+      profit: entries[0].totalProfit - entries[0].daily,
+      portfolio: entries[0].portfolio - entries[0].daily
+    };
+  }
+  let p = base.profit, v = base.portfolio;
+  for (const e of entries) {
+    p += e.daily; v += e.daily;
+    e.totalProfit = p; e.portfolio = v;
+  }
+}
+
+function addEntry() {
+  const date = document.getElementById('date').value;
+  const raw = String(document.getElementById('daily').value).trim().replace(/\./g,'').replace(',','.');
+  const daily = Number(raw);
+  if (!date || raw==="" || Number.isNaN(daily)) { alert("Tarih ve günlük kâr/zarar gir."); return; }
+  const idx = entries.findIndex(e=>e.date===date);
+  if (idx>=0) { entries[idx].daily = daily; entries[idx].note = "Güncellendi"; }
+  else entries.push({date,daily,totalProfit:0,portfolio:0,note:""});
+  recalcAll(); saveAll(); render();
+  document.getElementById('daily').value = "";
+  setNextDate();
+}
+
+function deleteEntry(date) {
+  if (!confirm(fullDate(date) + " kaydı silinsin mi?")) return;
+  entries = entries.filter(e=>e.date!==date);
+  recalcAll(); saveAll(); render();
+}
+
+function setNextDate() {
+  if (!entries.length) { document.getElementById('date').value = new Date().toISOString().slice(0,10); return; }
+  const last = entries[entries.length-1].date;
+  const d = new Date(last+"T00:00:00");
+  d.setDate(d.getDate()+1);
+  document.getElementById('date').value = d.toISOString().slice(0,10);
+}
+
+function drawChart(id, key, title) {
+  const c=document.getElementById(id), ctx=c.getContext('2d');
+  ctx.clearRect(0,0,c.width,c.height);
+  const pad=54, w=c.width-pad*2, h=c.height-pad*2;
+  const vals=entries.map(e=>e[key]);
+  let min=Math.min(...vals), max=Math.max(...vals);
+  if (key==='daily') { min=Math.min(min,0); max=Math.max(max,0); }
+  if (min===max) { min-=1; max+=1; }
+  ctx.strokeStyle="#25304a"; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(pad,pad); ctx.lineTo(pad,pad+h); ctx.lineTo(pad+w,pad+h); ctx.stroke();
+  const y = v => pad + h - ((v-min)/(max-min))*h;
+  const x = i => pad + (entries.length===1?0:(i/(entries.length-1))*w);
+  if (min<0 && max>0) { ctx.strokeStyle="#64748b"; ctx.beginPath(); ctx.moveTo(pad,y(0)); ctx.lineTo(pad+w,y(0)); ctx.stroke(); }
+  ctx.strokeStyle="#60a5fa"; ctx.lineWidth=3; ctx.beginPath();
+  entries.forEach((e,i)=>{ const xx=x(i), yy=y(e[key]); if(i===0) ctx.moveTo(xx,yy); else ctx.lineTo(xx,yy); });
+  ctx.stroke();
+  entries.forEach((e,i)=>{ ctx.fillStyle=e[key]>=0?'#22c55e':'#ef4444'; ctx.beginPath(); ctx.arc(x(i),y(e[key]),4,0,Math.PI*2); ctx.fill(); });
+  ctx.fillStyle="#e5e7eb"; ctx.font="22px -apple-system"; ctx.fillText(title, pad, 30);
+  ctx.fillStyle="#94a3b8"; ctx.font="14px -apple-system";
+  ctx.fillText(money(max), 8, y(max)+4); ctx.fillText(money(min), 8, y(min)+4);
+  const step=Math.max(1,Math.ceil(entries.length/6));
+  entries.forEach((e,i)=>{ if(i%step===0 || i===entries.length-1) ctx.fillText(shortDate(e.date), x(i)-18, c.height-16); });
+}
+
+function render() {
+  const empty = !entries.length;
+  document.getElementById('emptyState').classList.toggle('hidden', !empty);
+  document.getElementById('app').classList.toggle('hidden', empty);
+  if (empty) return;
+  const last=entries[entries.length-1];
+  const tc = totalCost();
+  document.getElementById('totalCost').textContent=money(tc);
+  document.getElementById('portfolio').textContent=money(last.portfolio);
+  document.getElementById('profit').textContent=money(last.totalProfit);
+  document.getElementById('profit').className='big '+cls(last.totalProfit);
+  document.getElementById('returnPct').textContent = tc>0 ? fmt2.format(last.totalProfit/tc*100)+"%" : "—";
+  document.getElementById('returnPct').className='big '+cls(last.totalProfit);
+  document.getElementById('costTable').innerHTML =
+    "<tr><th>Fon</th><th>Lot</th><th>Maliyet</th><th>Ort. maliyet</th></tr>" +
+    costs.map(x=>`<tr><td><b>${x.fund}</b></td><td>${fmt.format(x.lots)}</td><td>${money(x.cost)}</td><td>${fmt2.format(x.cost/x.lots)}</td></tr>`).join("");
+  document.getElementById('logTable').innerHTML =
+    "<tr><th>Tarih</th><th>Günlük</th><th>Toplam kâr</th><th>Portföy</th><th></th></tr>" +
+    entries.slice().reverse().map(e=>`<tr><td>${fullDate(e.date)}</td><td class="${cls(e.daily)}">${money(e.daily)}</td><td>${money(e.totalProfit)}</td><td>${money(e.portfolio)}</td><td><button class="del" onclick="deleteEntry('${e.date}')">×</button></td></tr>`).join("");
+  drawChart('dailyChart','daily','Günlük kâr / zarar');
+  drawChart('profitChart','totalProfit','Toplam kâr');
+  drawChart('portfolioChart','portfolio','Portföy büyüklüğü');
+}
+
+function exportJson() {
+  const blob=new Blob([JSON.stringify({costs,entries,base},null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='fon-portfoy-yedek.json'; a.click();
+}
+
+function importText(text) {
+  try {
+    // BOM, görünmez karakterler ve baş/son boşlukları temizle
+    const clean = String(text).replace(/^\uFEFF/, '').replace(/\u00A0/g, ' ').trim();
+    const data = JSON.parse(clean);
+    if (!Array.isArray(data.entries) || !data.entries.length) throw new Error("Dosyada 'entries' listesi bulunamadı");
+    entries = data.entries;
+    costs = Array.isArray(data.costs) ? data.costs : costs;
+    base = data.base || null;
+    recalcAll(); saveAll(); render(); setNextDate();
+    document.getElementById('pasteBox').classList.add('hidden');
+    alert("İçe aktarıldı: " + entries.length + " kayıt.");
+    return true;
+  } catch(e) {
+    alert("İçe aktarma hatası: " + e.message + "\n\nAlternatif: 'Yapıştırarak aktar' seçeneğini dene.");
+    document.getElementById('pasteBox').classList.remove('hidden');
+    return false;
+  }
+}
+
+function importJson(ev) {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => { importText(reader.result); ev.target.value = ""; };
+  reader.onerror = () => { alert("Dosya okunamadı (okuma hatası). 'Yapıştırarak aktar' seçeneğini dene."); document.getElementById('pasteBox').classList.remove('hidden'); ev.target.value = ""; };
+  reader.readAsText(file, 'utf-8');
+}
+
+function importPasted() {
+  importText(document.getElementById('pasteArea').value);
+}
+
+function togglePaste() {
+  document.getElementById('pasteBox').classList.toggle('hidden');
+}
+
+render(); setNextDate();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
