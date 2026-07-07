@@ -54,12 +54,21 @@ th:first-child,td:first-child { text-align:left; } th { color:var(--muted); font
 
 <h2>Günlük kayıt ekle</h2>
 <div class="card">
+  <button onclick="updatePrices()" id="updateBtn">Fiyatları güncelle (TEFAS)</button>
+  <div class="label" id="priceStatus" style="margin:6px 0 10px;text-align:center"></div>
   <input id="date" type="date">
   <input id="daily" inputmode="text" placeholder="Günlük kâr/zarar, örn: -28668">
-  <button onclick="addEntry()">Kaydı ekle / güncelle</button>
+  <button class="secondary" onclick="addEntry()">Elle kayıt ekle / güncelle</button>
   <button class="secondary" onclick="exportJson()">Veriyi yedekle</button>
   <button class="secondary" onclick="document.getElementById('importFile').click()">Veriyi içe aktar</button>
   <button class="secondary" onclick="togglePaste()">Yapıştırarak aktar</button>
+  <button class="secondary" onclick="toggleSettings()">Ayarlar</button>
+</div>
+
+<div id="settingsBox" class="card hidden" style="margin-top:10px">
+  <div class="label" style="margin-bottom:6px">TEFAS köprü adresi (Cloudflare Worker URL)</div>
+  <input id="workerUrl" placeholder="https://xxx.workers.dev">
+  <button onclick="saveSettings()">Kaydet</button>
 </div>
 
 <h2>Günlük kâr / zarar</h2><canvas id="dailyChart" width="900" height="420"></canvas>
@@ -86,6 +95,8 @@ const fmt2 = new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumF
 let entries = JSON.parse(localStorage.getItem('portfolioEntries') || '[]');
 let costs   = JSON.parse(localStorage.getItem('portfolioCosts') || '[]');
 let base    = JSON.parse(localStorage.getItem('portfolioBase') || 'null');
+let lastPrices = JSON.parse(localStorage.getItem('lastPrices') || 'null');
+let workerUrl  = localStorage.getItem('workerUrl') || '';
 
 function saveAll() {
   localStorage.setItem('portfolioEntries', JSON.stringify(entries));
@@ -181,9 +192,17 @@ function render() {
   document.getElementById('profit').className='big '+cls(last.totalProfit);
   document.getElementById('returnPct').textContent = tc>0 ? fmt2.format(last.totalProfit/tc*100)+"%" : "—";
   document.getElementById('returnPct').className='big '+cls(last.totalProfit);
-  document.getElementById('costTable').innerHTML =
-    "<tr><th>Fon</th><th>Lot</th><th>Maliyet</th><th>Ort. maliyet</th></tr>" +
-    costs.map(x=>`<tr><td><b>${x.fund}</b></td><td>${fmt.format(x.lots)}</td><td>${money(x.cost)}</td><td>${fmt2.format(x.cost/x.lots)}</td></tr>`).join("");
+  const hasPrices = lastPrices && lastPrices.funds;
+  document.getElementById('costTable').innerHTML = hasPrices
+    ? "<tr><th>Fon</th><th>Lot</th><th>Maliyet</th><th>Fiyat</th><th>Değer</th><th>Kâr</th></tr>" +
+      costs.map(x=>{
+        const p = lastPrices.funds[x.fund];
+        if (!p || p.error) return `<tr><td><b>${x.fund}</b></td><td>${fmt.format(x.lots)}</td><td>${money(x.cost)}</td><td colspan="3">—</td></tr>`;
+        const val = x.lots * p.price, kar = val - x.cost;
+        return `<tr><td><b>${x.fund}</b></td><td>${fmt.format(x.lots)}</td><td>${money(x.cost)}</td><td>${fmt2.format(p.price)}</td><td>${money(val)}</td><td class="${cls(kar)}">${money(kar)}</td></tr>`;
+      }).join("")
+    : "<tr><th>Fon</th><th>Lot</th><th>Maliyet</th><th>Ort. maliyet</th></tr>" +
+      costs.map(x=>`<tr><td><b>${x.fund}</b></td><td>${fmt.format(x.lots)}</td><td>${money(x.cost)}</td><td>${fmt2.format(x.cost/x.lots)}</td></tr>`).join("");
   document.getElementById('logTable').innerHTML =
     "<tr><th>Tarih</th><th>Günlük</th><th>Toplam kâr</th><th>Portföy</th><th></th></tr>" +
     entries.slice().reverse().map(e=>`<tr><td>${fullDate(e.date)}</td><td class="${cls(e.daily)}">${money(e.daily)}</td><td>${money(e.totalProfit)}</td><td>${money(e.portfolio)}</td><td><button class="del" onclick="deleteEntry('${e.date}')">×</button></td></tr>`).join("");
@@ -234,7 +253,78 @@ function togglePaste() {
   document.getElementById('pasteBox').classList.toggle('hidden');
 }
 
+function toggleSettings() {
+  const box = document.getElementById('settingsBox');
+  box.classList.toggle('hidden');
+  document.getElementById('workerUrl').value = workerUrl;
+}
+
+function saveSettings() {
+  workerUrl = document.getElementById('workerUrl').value.trim().replace(/\/+$/,'');
+  localStorage.setItem('workerUrl', workerUrl);
+  document.getElementById('settingsBox').classList.add('hidden');
+  alert("Kaydedildi.");
+}
+
+function nextDay(s) {
+  const d = new Date(s+"T00:00:00"); d.setDate(d.getDate()+1);
+  return d.toISOString().slice(0,10);
+}
+function isWeekend(s) {
+  const d = new Date(s+"T00:00:00").getDay();
+  return d===0 || d===6;
+}
+
+async function updatePrices() {
+  if (!workerUrl) { toggleSettings(); alert("Önce Ayarlar'dan Worker adresini gir."); return; }
+  if (!entries.length) { alert("Önce veriyi içe aktar."); return; }
+  const btn = document.getElementById('updateBtn');
+  const status = document.getElementById('priceStatus');
+  btn.disabled = true; status.textContent = "TEFAS'tan fiyatlar çekiliyor...";
+  try {
+    const r = await fetch(workerUrl + '?funds=' + costs.map(c=>c.fund).join(','));
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    const errs = costs.filter(c => !j.prices[c.fund] || j.prices[c.fund].error);
+    if (errs.length) throw new Error("Fiyat alınamadı: " + errs.map(c=>c.fund).join(', '));
+
+    // En güncel ortak tarih: fonların en son fiyat tarihlerinin en büyüğü
+    const priceDate = costs.map(c=>j.prices[c.fund].date).sort().pop();
+    const target = costs.reduce((s,c)=> s + c.lots * j.prices[c.fund].price, 0);
+
+    lastPrices = { date: priceDate, funds: j.prices, fetchedAt: new Date().toISOString() };
+    localStorage.setItem('lastPrices', JSON.stringify(lastPrices));
+
+    entries.sort((a,b)=>a.date.localeCompare(b.date));
+    const lastDate = entries[entries.length-1].date;
+
+    if (priceDate > lastDate) {
+      // Aradaki günleri 0 ile doldur (hafta sonu / veri açıklanmayan günler)
+      let d = nextDay(lastDate);
+      while (d < priceDate) {
+        entries.push({date:d, daily:0, totalProfit:0, portfolio:0, note: isWeekend(d) ? "Hafta sonu" : "Otomatik (0)"});
+        d = nextDay(d);
+      }
+      entries.push({date:priceDate, daily:0, totalProfit:0, portfolio:0, note:"TEFAS"});
+    }
+    // Fiyat tarihindeki kaydın günlük değerini, portföy = lot x fiyat olacak şekilde ayarla
+    recalcAll();
+    const idx = entries.findIndex(e=>e.date===priceDate);
+    if (idx < 0) throw new Error("Fiyat tarihi mevcut kayıtlardan eski: " + priceDate);
+    const prevPortfolio = idx===0 ? base.portfolio : entries[idx-1].portfolio;
+    entries[idx].daily = Math.round(target - prevPortfolio);
+    entries[idx].note = "TEFAS";
+    recalcAll(); saveAll(); render(); setNextDate();
+    status.textContent = "Güncellendi · fiyat tarihi: " + fullDate(priceDate);
+  } catch(e) {
+    status.textContent = "";
+    alert("Güncelleme hatası: " + e.message);
+  }
+  btn.disabled = false;
+}
+
 render(); setNextDate();
+if (lastPrices) document.getElementById('priceStatus').textContent = "Son fiyat tarihi: " + fullDate(lastPrices.date);
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 </script>
 </body>
