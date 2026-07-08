@@ -292,9 +292,11 @@ async function updatePrices() {
     // Son kayıttan bugüne olan boşluğu kapsayacak kadar geçmiş iste (+2 gün pay, azami 28)
     const days = Math.min(28, Math.max(8, daysBetween(lastDate, today) + 2));
 
-    const r = await fetch(workerUrl + '?funds=' + costs.map(c=>c.fund).join(',') + '&days=' + days);
+    const r = await fetch(workerUrl + '?funds=' + costs.map(c=>c.fund).join(',') + '&days=' + days,
+      { signal: AbortSignal.timeout(45000) });
     const j = await r.json();
     if (j.error) throw new Error(j.error);
+    if (!j.series) throw new Error("Worker eski sürümde. Cloudflare'de yeni worker.js kodunu deploy et.");
     const errs = costs.filter(c => !j.prices[c.fund] || j.prices[c.fund].error);
     if (errs.length) throw new Error("Fiyat alınamadı: " + errs.map(c=>c.fund).join(', '));
 
@@ -340,7 +342,10 @@ async function updatePrices() {
     status.textContent = "Güncellendi · " + updated + " gün işlendi · son fiyat: " + fullDate(maxDate);
   } catch(e) {
     status.textContent = "";
-    alert("Güncelleme hatası: " + e.message);
+    const msg = (e.name === 'TimeoutError' || e.name === 'AbortError')
+      ? "TEFAS yanıt vermedi (zaman aşımı). Birkaç dakika sonra tekrar dene."
+      : e.message;
+    alert("Güncelleme hatası: " + msg);
   }
   btn.disabled = false;
 }
