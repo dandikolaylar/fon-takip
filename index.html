@@ -89,7 +89,7 @@ th:first-child,td:first-child { text-align:left; } th { color:var(--muted); font
 <div class="footer">Ana ekrana eklemek için: Safari → Paylaş → Ana Ekrana Ekle</div>
 
 <script>
-const APP_VERSION = 'v9';
+const APP_VERSION = 'v10';
 const fmt = new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 0 });
 const fmt2 = new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -280,27 +280,33 @@ function daysBetween(a, b) {
   return Math.round((new Date(b+"T00:00:00") - new Date(a+"T00:00:00")) / 86400000);
 }
 
+function jsonpLoad(url, timeoutMs, show) {
+  // iOS Safari'de takılan cross-origin fetch yerine script/JSONP kanalı.
+  return new Promise((resolve, reject) => {
+    const cb = 'tefas_cb_' + Math.floor(Math.random()*1e9);
+    const s = document.createElement('script');
+    let remaining = Math.ceil(timeoutMs / 1000);
+    const ticker = setInterval(() => {
+      remaining--;
+      show("1/3 Deno bekleniyor · " + remaining + " sn kaldı");
+    }, 1000);
+    const t = setTimeout(() => { cleanup(); reject(new Error('Deno 60 sn içinde yanıt vermedi')); }, timeoutMs);
+    function cleanup() {
+      clearTimeout(t); clearInterval(ticker);
+      try { delete window[cb]; } catch(e){} s.remove();
+    }
+    window[cb] = data => { cleanup(); resolve(data); };
+    s.onerror = () => { cleanup(); reject(new Error('Deno script kanalı yüklenemedi')); };
+    s.src = url + '&callback=' + cb + '&_=' + Date.now();
+    document.body.appendChild(s);
+  });
+}
+
 async function bridgeRequest(reqUrl, show) {
-  // AbortSignal.timeout eski iOS sürümlerinde güvenilir değil. Zaman aşımını
-  // setTimeout + AbortController ile uygula ve yalnızca tek istek gönder.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60000);
-  try {
-    const r = await fetch(reqUrl, {
-      signal: controller.signal,
-      cache: 'no-store',
-      headers: { 'Accept': 'application/json' }
-    });
-    show("2/3 Yanıt geldi (HTTP " + r.status + "), okunuyor...");
-    const text = await r.text();
-    let data;
-    try { data = JSON.parse(text); }
-    catch (_) { throw new Error("Köprü JSON yerine geçersiz yanıt verdi (HTTP " + r.status + ")."); }
-    if (!r.ok && !data.error) throw new Error("Köprü HTTP " + r.status);
-    return data;
-  } finally {
-    clearTimeout(timer);
-  }
+  // Fetch'i hiç kullanma; telefonda çalıştığı kanıtlanmış kaynak yükleme yolunu kullan.
+  const data = await jsonpLoad(reqUrl, 60000, show);
+  show("2/3 Yanıt geldi (script kanalı), okunuyor...");
+  return data;
 }
 
 async function updatePrices() {
@@ -365,7 +371,7 @@ async function updatePrices() {
     show("Güncellendi · " + updated + " gün işlendi · son fiyat: " + fullDate(maxDate));
   } catch(e) {
     const msg = (e.name === 'TimeoutError' || e.name === 'AbortError')
-      ? "Köprü 60 sn içinde yanıt vermedi (zaman aşımı)."
+      ? "Köprü 45 sn içinde yanıt vermedi (zaman aşımı)."
       : e.message;
     show("HATA: " + msg, true);
   }

@@ -1,4 +1,4 @@
-const CACHE = 'fon-takip-v7';
+const CACHE = 'fon-takip-v10';
 const FILES = ['./', './index.html', './manifest.json', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
