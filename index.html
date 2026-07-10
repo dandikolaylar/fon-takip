@@ -89,7 +89,7 @@ th:first-child,td:first-child { text-align:left; } th { color:var(--muted); font
 <div class="footer">Ana ekrana eklemek için: Safari → Paylaş → Ana Ekrana Ekle</div>
 
 <script>
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 const fmt = new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 0 });
 const fmt2 = new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -355,7 +355,17 @@ render(); setNextDate();
 document.getElementById('appVer').textContent = APP_VERSION;
 if (lastPrices) document.getElementById('priceStatus').textContent = "Son fiyat tarihi: " + fullDate(lastPrices.date);
 else if (workerUrl) document.getElementById('priceStatus').textContent = "Köprü: " + workerUrl.replace(/^https?:\/\//,'');
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+
+// v7: service worker tamamen devre dışı — kayıtlı olanları sök, önbellekleri sil.
+// (SW'nin dış istekleri yakalaması iOS'ta fiyat çekimini kilitliyordu.)
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations()
+    .then(regs => Promise.all(regs.map(r => r.unregister())))
+    .catch(()=>{});
+}
+if (window.caches && caches.keys) {
+  caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))).catch(()=>{});
+}
 </script>
 </body>
 </html>
