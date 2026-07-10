@@ -1,4 +1,4 @@
-const CACHE = 'fon-takip-v2';
+const CACHE = 'fon-takip-v7';
 const FILES = ['./', './index.html', './manifest.json', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -16,8 +16,11 @@ self.addEventListener('activate', e => {
 
 // index.html için: önce ağdan dene (güncellemeler gelsin), olmazsa cache.
 // Diğer dosyalar için: önce cache.
+// DIŞ alan adlarına giden istekleri (TEFAS köprüsü gibi) HİÇ yakalama —
+// tarayıcı kendisi halletsin. (iOS'ta dış istekleri yakalamak takılmaya yol açıyordu.)
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
+  if (url.origin !== self.location.origin) return; // dış istek: karışma
   if (url.pathname.endsWith('/') || url.pathname.endsWith('index.html')) {
     e.respondWith(
       fetch(e.request).then(r => {
