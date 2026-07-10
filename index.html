@@ -35,7 +35,7 @@ th:first-child,td:first-child { text-align:left; } th { color:var(--muted); font
 </style>
 </head>
 <body>
-<h1>Fon Portföy Takip</h1>
+<h1>Fon Portföy Takip <span id="appVer" style="font-size:12px;color:var(--muted);font-weight:400"></span></h1>
 <p>Veriler yalnızca bu telefonda, uygulama hafızasında saklanır.</p>
 
 <div id="emptyState" class="card hidden">
@@ -89,6 +89,7 @@ th:first-child,td:first-child { text-align:left; } th { color:var(--muted); font
 <div class="footer">Ana ekrana eklemek için: Safari → Paylaş → Ana Ekrana Ekle</div>
 
 <script>
+const APP_VERSION = 'v6';
 const fmt = new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 0 });
 const fmt2 = new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -280,25 +281,28 @@ function daysBetween(a, b) {
 }
 
 async function updatePrices() {
-  if (!workerUrl) { toggleSettings(); alert("Önce Ayarlar'dan Worker adresini gir."); return; }
-  if (!entries.length) { alert("Önce veriyi içe aktar."); return; }
-  const btn = document.getElementById('updateBtn');
   const status = document.getElementById('priceStatus');
-  btn.disabled = true; status.textContent = "TEFAS'tan fiyatlar çekiliyor...";
+  const show = (msg, isErr) => { status.textContent = msg; status.style.color = isErr ? '#ef4444' : ''; };
+  if (!workerUrl) { toggleSettings(); show("HATA: Ayarlar'dan köprü adresini gir.", true); return; }
+  if (!entries.length) { show("HATA: Önce veriyi içe aktar.", true); return; }
+  const btn = document.getElementById('updateBtn');
+  btn.disabled = true;
   try {
     entries.sort((a,b)=>a.date.localeCompare(b.date));
     const lastDate = entries[entries.length-1].date;
     const today = new Date().toISOString().slice(0,10);
-    // Son kayıttan bugüne olan boşluğu kapsayacak kadar geçmiş iste (+2 gün pay, azami 28)
     const days = Math.min(28, Math.max(8, daysBetween(lastDate, today) + 2));
+    const reqUrl = workerUrl + '?funds=' + costs.map(c=>c.fund).join(',') + '&days=' + days;
 
-    const r = await fetch(workerUrl + '?funds=' + costs.map(c=>c.fund).join(',') + '&days=' + days,
-      { signal: AbortSignal.timeout(45000) });
+    show("1/3 İstek atılıyor → " + workerUrl.replace(/^https?:\/\//,''));
+    const r = await fetch(reqUrl, { signal: AbortSignal.timeout(45000), cache: 'no-store' });
+    show("2/3 Yanıt geldi (HTTP " + r.status + "), okunuyor...");
     const j = await r.json();
     if (j.error) throw new Error(j.error);
-    if (!j.series) throw new Error("Worker eski sürümde. Cloudflare'de yeni worker.js kodunu deploy et.");
+    if (!j.series) throw new Error("Köprü eski sürümde. Yeni worker kodunu deploy et.");
     const errs = costs.filter(c => !j.prices[c.fund] || j.prices[c.fund].error);
     if (errs.length) throw new Error("Fiyat alınamadı: " + errs.map(c=>c.fund).join(', '));
+    show("3/3 Kayıtlar işleniyor...");
 
     lastPrices = { date: costs.map(c=>j.prices[c.fund].date).sort().pop(), funds: j.prices, fetchedAt: new Date().toISOString() };
     localStorage.setItem('lastPrices', JSON.stringify(lastPrices));
@@ -315,7 +319,6 @@ async function updatePrices() {
     if (!validDates.length) throw new Error("Aralıkta fiyat verisi yok.");
     const maxDate = validDates[validDates.length-1];
 
-    // Son kayıttan en güncel fiyat tarihine kadar eksik günleri oluştur
     let d = nextDay(lastDate);
     while (d <= maxDate) {
       if (!entries.find(e=>e.date===d)) {
@@ -326,10 +329,9 @@ async function updatePrices() {
     }
     recalcAll();
 
-    // Fiyatı olan her günü (son kayıt günü dahil) gerçek portföy değerine göre işle
     let updated = 0;
     for (const vd of validDates) {
-      if (vd < lastDate) continue; // eski manuel kayıtlara dokunma
+      if (vd < lastDate) continue;
       const idx = entries.findIndex(e=>e.date===vd);
       if (idx < 0) continue;
       const prev = idx===0 ? base.portfolio : entries[idx-1].portfolio;
@@ -339,19 +341,20 @@ async function updatePrices() {
       updated++;
     }
     saveAll(); render(); setNextDate();
-    status.textContent = "Güncellendi · " + updated + " gün işlendi · son fiyat: " + fullDate(maxDate);
+    show("Güncellendi · " + updated + " gün işlendi · son fiyat: " + fullDate(maxDate));
   } catch(e) {
-    status.textContent = "";
     const msg = (e.name === 'TimeoutError' || e.name === 'AbortError')
-      ? "TEFAS yanıt vermedi (zaman aşımı). Birkaç dakika sonra tekrar dene."
+      ? "Köprü 45 sn içinde yanıt vermedi (zaman aşımı)."
       : e.message;
-    alert("Güncelleme hatası: " + msg);
+    show("HATA: " + msg, true);
   }
   btn.disabled = false;
 }
 
 render(); setNextDate();
+document.getElementById('appVer').textContent = APP_VERSION;
 if (lastPrices) document.getElementById('priceStatus').textContent = "Son fiyat tarihi: " + fullDate(lastPrices.date);
+else if (workerUrl) document.getElementById('priceStatus').textContent = "Köprü: " + workerUrl.replace(/^https?:\/\//,'');
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 </script>
 </body>
